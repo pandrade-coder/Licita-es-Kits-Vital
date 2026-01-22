@@ -1,0 +1,7 @@
+{
+  "name": "Oráculo - Gestão de Licitações",
+  "description": "Sistema completo para gestão de licitações, documentos e calendários de pregões para a Kits Vital, com inteligência artificial para análise de editais.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
