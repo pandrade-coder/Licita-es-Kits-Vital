@@ -17,14 +17,15 @@ import MayaPage from './components/MayaPage';
 import ItemManagerModal from './components/ItemManagerModal';
 import { MOCK_BIDS, MOCK_DOCS } from './constants';
 import { Bid, CompanyDocument, Product, Notification, Activity, BidItem, AuditLog } from './types';
-import { Loader2, Cloud, LogOut, RefreshCcw, WifiOff, Sparkles, AlertCircle, Database, CheckCircle2, DownloadCloud, Clock, ShieldCheck } from 'lucide-react';
+import { Loader2, Cloud, LogOut, RefreshCcw, WifiOff, Sparkles, AlertCircle, Database, CheckCircle2, DownloadCloud, Clock, ShieldCheck, AlertTriangle } from 'lucide-react';
 import { DataService } from './services/dataService';
 import { supabase, signOut } from './services/supabase';
 
 const App: React.FC = () => {
   const [session, setSession] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'error' | 'idle' | 'offline'>('idle');
+  const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'error' | 'idle' | 'offline' | 'conflict'>('idle');
+  const [lastServerUpdate, setLastServerUpdate] = useState<string | null>(null);
 
   const [activeTab, setActiveTab] = useState('dashboard');
   const [mayaContext, setMayaContext] = useState<{ bidId?: string; initialPrompt?: string } | null>(null);
@@ -122,19 +123,24 @@ const App: React.FC = () => {
   }, [triggerToast]);
 
   const requestSync = useCallback(async () => {
-    if (!session || !canSyncToCloud.current) return;
-    setSyncStatus('syncing');
+    // Se já estiver em conflito, não tenta salvar por cima para não corromper
+    if (!session || !canSyncToCloud.current || syncStatus === 'conflict') return;
     
+    setSyncStatus('syncing');
     const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
     const cleanedLogs = logs.filter(l => new Date(l.timestamp).getTime() > sevenDaysAgo);
     
-    const result = await DataService.syncToCloud({ bids, docs, products, activities, logs: cleanedLogs }) as any;
+    const result = await DataService.syncToCloud({ bids, docs, products, activities, logs: cleanedLogs }, lastServerUpdate);
+    
     if (result.success) {
       setSyncStatus('synced');
-    } else {
+      if (result.timestamp) setLastServerUpdate(result.timestamp);
+    } else if (result.conflict) {
+      setSyncStatus('conflict');
+    } else if (result.error !== 'Ocupado') {
       setSyncStatus('error');
     }
-  }, [bids, docs, products, activities, logs, session]);
+  }, [bids, docs, products, activities, logs, session, syncStatus, lastServerUpdate]);
 
   const initializeData = useCallback(async (userSession: any) => {
     if (isInitialized.current) return;
@@ -158,8 +164,9 @@ const App: React.FC = () => {
       setLoading(false); 
       setSyncStatus('syncing');
       
-      const cloudData = await DataService.loadFromCloud();
-      if (cloudData) {
+      const cloudResult = await DataService.loadFromCloud();
+      if (cloudResult) {
+        const { data: cloudData, updatedAt } = cloudResult;
         setBids(prev => DataService.mergeCollections(prev, cloudData.bids));
         setDocs(prev => DataService.mergeCollections(prev, cloudData.docs));
         setProducts(prev => DataService.mergeCollections(prev, cloudData.products));
@@ -169,6 +176,7 @@ const App: React.FC = () => {
         const finalLogs = mergedLogs.filter(l => new Date(l.timestamp).getTime() > sevenDaysAgo);
         setLogs(finalLogs);
         
+        setLastServerUpdate(updatedAt);
         setSyncStatus('synced');
       }
       canSyncToCloud.current = true;
@@ -194,16 +202,25 @@ const App: React.FC = () => {
     return () => clearInterval(timer);
   }, []);
 
+  // MOTOR DE SINCRONIZAÇÃO OTIMIZADO
+  // Agora ele observa apenas os dados de negócio. Mudanças em 'syncStatus' ou na própria função 'requestSync' 
+  // não resetam o timer, evitando o loop infinito.
   useEffect(() => {
-    if (canSyncToCloud.current && session) {
+    if (!canSyncToCloud.current || !session || syncStatus === 'conflict') return;
+
+    const debounceTimer = setTimeout(() => {
       requestSync();
-    }
-  }, [bids, docs, products, activities, logs, session, requestSync]);
+    }, 2000); // 2 segundos de fôlego após a última mudança de dado
+
+    return () => clearTimeout(debounceTimer);
+    // REMOVIDO syncStatus e requestSync das dependências para quebrar o loop
+  }, [bids, docs, products, activities, logs, session]);
 
   const handleSaveBid = useCallback((bid: Bid) => {
     const nextBids = DataService.bids.save(bids, bid);
     addLog(bid.id ? 'update' : 'create', 'bid', bid.title);
     setBids(nextBids);
+    DataService.persistBids(nextBids);
     setIsModalOpen(false);
     setEditingBid(null);
     triggerToast('success', 'Licitação salva.');
@@ -214,6 +231,7 @@ const App: React.FC = () => {
     const timestamped = newDocs.map(d => ({ ...d, updated_at: ts }));
     addLog('update', 'doc', 'Documentação');
     setDocs(timestamped);
+    DataService.persistDocs(timestamped);
   };
 
   const handleUpdateProducts = (newProds: Product[]) => {
@@ -221,6 +239,7 @@ const App: React.FC = () => {
     const timestamped = newProds.map(p => ({ ...p, updated_at: ts }));
     addLog('update', 'product', 'Produtos');
     setProducts(timestamped);
+    DataService.persistProducts(timestamped);
   };
 
   const handleUpdateActivities = (newActs: Activity[]) => {
@@ -228,13 +247,17 @@ const App: React.FC = () => {
     const timestamped = newActs.map(a => ({ ...a, updated_at: ts }));
     addLog('update', 'activity', 'Atividades');
     setActivities(timestamped);
+    DataService.persistActivities(timestamped);
   };
 
   const handleDeleteBid = (id: string) => {
     if (!window.confirm("Deseja excluir esta licitação definitivamente? Esta ação será enviada para a nuvem.")) return;
     const bidToDelete = bids.find(b => b.id === id);
     const nextBids = bids.filter(b => b.id !== id);
+    
     setBids(nextBids);
+    DataService.persistBids(nextBids);
+    
     if (bidToDelete) {
        addLog('delete', 'bid', bidToDelete.title);
     }
@@ -271,7 +294,9 @@ const App: React.FC = () => {
 
     const updatedBid = { ...bid, items: updatedItems, updated_at: nowTs };
     addLog('update', 'bid', `Item editado em: ${bid.title}`);
-    setBids(bids.map(b => b.id === bidId ? updatedBid : b));
+    const nextBids = bids.map(b => b.id === bidId ? updatedBid : b);
+    setBids(nextBids);
+    DataService.persistBids(nextBids);
     setEditingItemId(null);
     setNewItemData({
       number: '', name: '', quantity: '', brand: '', model: '', 
@@ -285,7 +310,9 @@ const App: React.FC = () => {
     if (!bid) return;
     const updatedBid = { ...bid, items: bid.items.filter(it => it.id !== itemId), updated_at: new Date().toISOString() };
     addLog('update', 'bid', `Item removido de: ${bid.title}`);
-    setBids(bids.map(b => b.id === bidId ? updatedBid : b));
+    const nextBids = bids.map(b => b.id === bidId ? updatedBid : b);
+    setBids(nextBids);
+    DataService.persistBids(nextBids);
   };
 
   const changeUser = (user: 'Marcos' | 'Pablo') => {
@@ -308,17 +335,28 @@ const App: React.FC = () => {
 
   const forceCloudRefresh = async () => {
     setSyncStatus('syncing');
-    const cloudData = await DataService.loadFromCloud();
-    if (cloudData) {
-      setBids(prev => DataService.mergeCollections(prev, cloudData.bids));
-      setDocs(prev => DataService.mergeCollections(prev, cloudData.docs));
-      setProducts(prev => DataService.mergeCollections(prev, cloudData.products));
-      setActivities(prev => DataService.mergeCollections(prev, cloudData.activities));
-      setLogs(prev => DataService.mergeCollections(prev, cloudData.logs || []));
-      addLog('sync', 'finance', 'Cloud Forçada');
-      triggerToast('success', 'Nuvem sincronizada.');
+    const cloudResult = await DataService.loadFromCloud();
+    if (cloudResult) {
+      const { data: cloudData, updatedAt } = cloudResult;
+      setBids(cloudData.bids);
+      setDocs(cloudData.docs);
+      setProducts(cloudData.products);
+      setActivities(cloudData.activities);
+      setLogs(cloudData.logs || []);
+      
+      DataService.persistBids(cloudData.bids);
+      DataService.persistDocs(cloudData.docs);
+      DataService.persistProducts(cloudData.products);
+      DataService.persistActivities(cloudData.activities);
+      DataService.persistLogs(cloudData.logs || []);
+
+      setLastServerUpdate(updatedAt);
+      addLog('sync', 'finance', 'Cloud Download Completo');
+      triggerToast('success', 'Dados sincronizados com a nuvem.');
+      setSyncStatus('synced');
+    } else {
+      setSyncStatus('error');
     }
-    setSyncStatus('synced');
   };
 
   if (loading) return (
@@ -356,6 +394,22 @@ const App: React.FC = () => {
       />
       
       <main className="flex-1 pl-64 h-screen overflow-hidden flex flex-col">
+        {/* AVISO DE CONFLITO BLOQUEANTE */}
+        {syncStatus === 'conflict' && (
+           <div className="bg-rose-600 text-white px-10 py-3 flex items-center justify-between animate-in slide-in-from-top duration-300 z-[100] shrink-0">
+              <div className="flex items-center gap-4">
+                 <AlertTriangle size={20} className="animate-pulse" />
+                 <span className="text-xs font-black uppercase tracking-widest">CONFLITO: Outro terminal salvou dados novos. Recarregue para não perder nada.</span>
+              </div>
+              <button 
+                onClick={forceCloudRefresh}
+                className="bg-white text-rose-600 px-6 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest hover:bg-slate-100 transition-all shadow-lg"
+              >
+                RECARREGAR NUVEM AGORA
+              </button>
+           </div>
+        )}
+
         <header className="h-16 bg-white border-b px-10 flex items-center justify-between shrink-0 z-50">
           <div className="flex items-center gap-8">
              <div className="flex items-center gap-3">
@@ -384,11 +438,13 @@ const App: React.FC = () => {
           <div className="flex items-center gap-3">
             <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-all ${
               syncStatus === 'synced' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 
-              syncStatus === 'syncing' ? `bg-${userColor}-50 text-${userColor}-500 border-${userColor}-100` : 'bg-slate-50 text-slate-400 border-slate-100'
+              syncStatus === 'syncing' ? `bg-${userColor}-50 text-${userColor}-500 border-${userColor}-100` : 
+              syncStatus === 'conflict' ? 'bg-rose-50 text-rose-600 border-rose-100' :
+              'bg-slate-50 text-slate-400 border-slate-100'
             }`}>
-                {syncStatus === 'syncing' ? <RefreshCcw size={12} className="animate-spin" /> : <Cloud size={12} />}
+                {syncStatus === 'syncing' ? <RefreshCcw size={12} className="animate-spin" /> : syncStatus === 'conflict' ? <AlertTriangle size={12} /> : <Cloud size={12} />}
                 <span className="text-[8px] font-black uppercase tracking-widest">
-                  {syncStatus === 'synced' ? 'Sincronizado' : syncStatus === 'syncing' ? 'Salvando...' : 'Offline'}
+                  {syncStatus === 'synced' ? 'Sincronizado' : syncStatus === 'syncing' ? 'Salvando...' : syncStatus === 'conflict' ? 'Erro de Conflito' : 'Offline'}
                 </span>
             </div>
             <button onClick={forceCloudRefresh} title="Baixar dados da Nuvem" className={`p-2 bg-slate-50 text-slate-300 hover:${accentBgClass} hover:text-white rounded-lg transition-all border border-slate-100`}>

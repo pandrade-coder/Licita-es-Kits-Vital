@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo } from 'react';
-import { Search, Plus, MoreVertical, Trash2, Calendar as CalendarIcon, Clock, Loader2, Sparkles, Box, ShieldCheck, FlaskConical, ListFilter, Info, ChevronRight, History, CalendarDays } from 'lucide-react';
+import { Search, Plus, MoreVertical, Trash2, Calendar as CalendarIcon, Clock, Loader2, Sparkles, Box, ShieldCheck, FlaskConical, ListFilter, Info, ChevronRight, History, CalendarDays, Zap } from 'lucide-react';
 import { Bid, BidStatus } from '../types';
 import { STATUS_COLORS, STATUS_ICONS } from '../constants';
 
@@ -84,7 +84,6 @@ const BidsPage: React.FC<BidsPageProps> = ({
     }
   };
 
-  // Lógica de Agrupamento Cronológico
   const bidSections = useMemo(() => {
     const today = new Date(now);
     today.setHours(0, 0, 0, 0);
@@ -98,7 +97,7 @@ const BidsPage: React.FC<BidsPageProps> = ({
     filteredBids.forEach(bid => {
       const bidDate = new Date(bid.date);
       if (isNaN(bidDate.getTime())) {
-        proximas.push(bid); // Sem data vai para próximas por segurança
+        proximas.push(bid); 
         return;
       }
 
@@ -111,10 +110,6 @@ const BidsPage: React.FC<BidsPageProps> = ({
       }
     });
 
-    // Ordenação: 
-    // Hoje: Mais cedo primeiro
-    // Próximas: Mais próxima primeiro
-    // Passadas: Mais recente primeiro
     return {
       hoje: hoje.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()),
       proximas: proximas.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()),
@@ -143,98 +138,108 @@ const BidsPage: React.FC<BidsPageProps> = ({
     { id: BidStatus.LOST, label: 'PERDIDOS' }
   ];
 
-  // Fix: Converted local BidCard component to a function to avoid 'key' prop typing mismatch in lists
-  const renderBidCard = (bid: Bid) => (
-    <div key={bid.id} className={`bg-white rounded-[3rem] border-2 shadow-xl hover:shadow-2xl transition-all flex flex-col h-full relative group/card ${getStatusStyle(bid.status)}`}>
-        <div className="p-8 pb-6 space-y-6">
-          <div className="flex justify-between items-start">
-            <span className={`px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-widest border flex items-center gap-2 shadow-sm ${STATUS_COLORS[bid.status]}`}>
-              {STATUS_ICONS[bid.status]} {bid.status.toUpperCase()}
-            </span>
-            <div className="flex items-center gap-1 opacity-40 group-hover/card:opacity-100 transition-opacity">
-              <button onClick={(e) => { e.stopPropagation(); handleDeleteBid(bid.id); }} className="p-2 text-slate-300 hover:text-rose-600 transition-colors"><Trash2 size={18} /></button>
-              <button onClick={() => openEditBid(bid)} className="p-2 text-slate-300 hover:text-slate-900 transition-colors"><MoreVertical size={20} /></button>
-            </div>
-          </div>
+  const renderBidCard = (bid: Bid) => {
+    // Lógica para detectar se foi atualizado nos últimos 10 minutos
+    const isRecent = bid.updated_at && (new Date().getTime() - new Date(bid.updated_at).getTime() < 10 * 60 * 1000);
+
+    return (
+      <div key={bid.id} className={`bg-white rounded-[3rem] border-2 shadow-xl hover:shadow-2xl transition-all flex flex-col h-full relative group/card ${getStatusStyle(bid.status)}`}>
+          {isRecent && (
+             <div className="absolute -top-3 -right-3 z-20 bg-blue-600 text-white p-2 rounded-full shadow-lg animate-bounce" title="Atualizado Recentemente">
+                <Zap size={16} fill="currentColor" />
+             </div>
+          )}
           
-          <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">
-            <span>ORDEM: <span className="text-slate-600">{bid.order || '---'}</span></span>
-            <span className="mx-1">|</span>
-            <span>PREGÃO: <span className="text-blue-600">{bid.biddingNumber || '---'}</span></span>
-          </div>
-
-          <div className="space-y-2">
-            <h3 className="font-bold text-slate-800 text-2xl leading-snug line-clamp-2 min-h-[4rem]">
-              {bid.title}
-            </h3>
-            <p className="text-[11px] font-black text-slate-400 uppercase tracking-widest leading-tight">
-              {bid.organ}
-            </p>
-          </div>
-
-          <button 
-            onClick={() => setItemManagerBidId(bid.id)}
-            className="w-full flex items-center justify-between p-5 bg-slate-50 border border-slate-100 rounded-[1.5rem] group/item hover:bg-blue-50 transition-all overflow-hidden"
-          >
-            <div className="flex items-center gap-4 min-w-0">
-              <div className="p-3 bg-white rounded-xl shadow-sm text-slate-400 group-hover/item:text-blue-600 transition-colors shrink-0">
-                <Box size={20} />
-              </div>
-              <span className="text-[11px] font-black text-slate-500 uppercase tracking-widest group-hover/item:text-blue-700 whitespace-nowrap overflow-hidden text-ellipsis">
-                Editar Itens ({bid.items.length} itens)
+          <div className="p-8 pb-6 space-y-6">
+            <div className="flex justify-between items-start">
+              <span className={`px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-widest border flex items-center gap-2 shadow-sm ${STATUS_COLORS[bid.status]}`}>
+                {STATUS_ICONS[bid.status]} {bid.status.toUpperCase()}
               </span>
+              <div className="flex items-center gap-1 opacity-40 group-hover/card:opacity-100 transition-opacity">
+                <button onClick={(e) => { e.stopPropagation(); handleDeleteBid(bid.id); }} className="p-2 text-slate-300 hover:text-rose-600 transition-colors"><Trash2 size={18} /></button>
+                <button onClick={() => openEditBid(bid)} className="p-2 text-slate-300 hover:text-slate-900 transition-colors"><MoreVertical size={20} /></button>
+              </div>
             </div>
-            <ChevronRight size={18} className="text-slate-300 group-hover/item:translate-x-1 transition-transform shrink-0" />
-          </button>
-          
-          <div className="grid grid-cols-2 gap-3">
-            <div className={`flex items-center justify-center gap-2 py-3 rounded-2xl border transition-all ${bid.anvisa ? 'bg-emerald-50 border-emerald-100 text-emerald-600' : 'bg-slate-50 border-slate-100 text-slate-300 opacity-50'}`}>
-              <ShieldCheck size={16} />
-              <span className="text-[10px] font-black uppercase tracking-widest">ANVISA</span>
+            
+            <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+              <span>ORDEM: <span className="text-slate-600">{bid.order || '---'}</span></span>
+              <span className="mx-1">|</span>
+              <span>PREGÃO: <span className="text-blue-600">{bid.biddingNumber || '---'}</span></span>
             </div>
-            <div className={`flex items-center justify-center gap-2 py-3 rounded-2xl border transition-all ${bid.sample ? 'bg-amber-50 border-amber-100 text-amber-600' : 'bg-slate-50 border-slate-100 text-slate-300 opacity-50'}`}>
-              <FlaskConical size={16} />
-              <span className="text-[10px] font-black uppercase tracking-widest">AMOSTRA</span>
-            </div>
-          </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1">
-              <span className="text-[9px] uppercase font-black text-slate-400 block tracking-widest">Data Pregão</span>
-              <div className="text-[12px] font-bold text-slate-700 flex flex-col">
-                <div className="flex items-center gap-2">
-                  <CalendarIcon size={14} className="text-blue-500" /> {formatDate(bid.date)}
+            <div className="space-y-2">
+              <h3 className="font-bold text-slate-800 text-2xl leading-snug line-clamp-2 min-h-[4rem]">
+                {bid.title}
+              </h3>
+              <p className="text-[11px] font-black text-slate-400 uppercase tracking-widest leading-tight">
+                {bid.organ}
+              </p>
+            </div>
+
+            <button 
+              onClick={() => setItemManagerBidId(bid.id)}
+              className="w-full flex items-center justify-between p-5 bg-slate-50 border border-slate-100 rounded-[1.5rem] group/item hover:bg-blue-50 transition-all overflow-hidden"
+            >
+              <div className="flex items-center gap-4 min-w-0">
+                <div className="p-3 bg-white rounded-xl shadow-sm text-slate-400 group-hover/item:text-blue-600 transition-colors shrink-0">
+                  <Box size={20} />
                 </div>
-                <div className="flex items-center gap-2 text-slate-400 ml-5 mt-0.5 text-[11px]">
-                  <Clock size={12} /> {formatTime(bid.date)}
+                <span className="text-[11px] font-black text-slate-500 uppercase tracking-widest group-hover/item:text-blue-700 whitespace-nowrap overflow-hidden text-ellipsis">
+                  Editar Itens ({bid.items.length} itens)
+                </span>
+              </div>
+              <ChevronRight size={18} className="text-slate-300 group-hover/item:translate-x-1 transition-transform shrink-0" />
+            </button>
+            
+            <div className="grid grid-cols-2 gap-3">
+              <div className={`flex items-center justify-center gap-2 py-3 rounded-2xl border transition-all ${bid.anvisa ? 'bg-emerald-50 border-emerald-100 text-emerald-600' : 'bg-slate-50 border-slate-100 text-slate-300 opacity-50'}`}>
+                <ShieldCheck size={16} />
+                <span className="text-[10px] font-black uppercase tracking-widest">ANVISA</span>
+              </div>
+              <div className={`flex items-center justify-center gap-2 py-3 rounded-2xl border transition-all ${bid.sample ? 'bg-amber-50 border-amber-100 text-amber-600' : 'bg-slate-50 border-slate-100 text-slate-300 opacity-50'}`}>
+                <FlaskConical size={16} />
+                <span className="text-[10px] font-black uppercase tracking-widest">AMOSTRA</span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <span className="text-[9px] uppercase font-black text-slate-400 block tracking-widest">Data Pregão</span>
+                <div className="text-[12px] font-bold text-slate-700 flex flex-col">
+                  <div className="flex items-center gap-2">
+                    <CalendarIcon size={14} className="text-blue-500" /> {formatDate(bid.date)}
+                  </div>
+                  <div className="flex items-center gap-2 text-slate-400 ml-5 mt-0.5 text-[11px]">
+                    <Clock size={12} /> {formatTime(bid.date)}
+                  </div>
+                </div>
+              </div>
+              <div className="space-y-1 text-right">
+                <span className="text-[9px] uppercase font-black text-slate-400 block tracking-widest">Total Lote</span>
+                <div className="text-[14px] font-black text-emerald-600">
+                  {formatCurrency(calculateBidTotal(bid))}
                 </div>
               </div>
             </div>
-            <div className="space-y-1 text-right">
-              <span className="text-[9px] uppercase font-black text-slate-400 block tracking-widest">Total Lote</span>
-              <div className="text-[14px] font-black text-emerald-600">
-                {formatCurrency(calculateBidTotal(bid))}
-              </div>
-            </div>
           </div>
-        </div>
 
-        <div className="mt-auto p-8 pt-2 flex items-center gap-3">
-          <button 
-            onClick={() => openViewBid(bid)} 
-            className="flex-1 py-5 bg-slate-950 text-white rounded-[1.5rem] font-black text-[11px] uppercase tracking-[0.2em] shadow-lg hover:bg-black transition-all active:scale-95"
-          >
-            Abrir Ficha
-          </button>
-          <button 
-            onClick={(e) => onGenerateClick(e, bid)} 
-            className="p-5 bg-blue-600 text-white rounded-[1.5rem] hover:bg-blue-700 shadow-xl shadow-blue-200 transition-all active:scale-95 group/maya"
-          >
-            {generatingId === bid.id ? <Loader2 size={26} className="animate-spin" /> : <Sparkles size={26} className="group-hover/maya:scale-110 transition-transform" />}
-          </button>
-        </div>
-    </div>
-  );
+          <div className="mt-auto p-8 pt-2 flex items-center gap-3">
+            <button 
+              onClick={() => openViewBid(bid)} 
+              className="flex-1 py-5 bg-slate-950 text-white rounded-[1.5rem] font-black text-[11px] uppercase tracking-[0.2em] shadow-lg hover:bg-black transition-all active:scale-95"
+            >
+              Abrir Ficha
+            </button>
+            <button 
+              onClick={(e) => onGenerateClick(e, bid)} 
+              className="p-5 bg-blue-600 text-white rounded-[1.5rem] hover:bg-blue-700 shadow-xl shadow-blue-200 transition-all active:scale-95 group/maya"
+            >
+              {generatingId === bid.id ? <Loader2 size={26} className="animate-spin" /> : <Sparkles size={26} className="group-hover/maya:scale-110 transition-transform" />}
+            </button>
+          </div>
+      </div>
+    );
+  };
 
   const SectionHeader = ({ title, icon: Icon, count, color }: any) => (
     <div className="flex items-center justify-between py-6 border-b border-slate-100 mb-8 sticky top-0 bg-slate-50/80 backdrop-blur-md z-10 px-2">
@@ -306,34 +311,28 @@ const BidsPage: React.FC<BidsPageProps> = ({
 
       {filteredBids.length > 0 ? (
         <div className="space-y-20 pb-40">
-          {/* SEÇÃO HOJE */}
           {bidSections.hoje.length > 0 && (
             <section>
               <SectionHeader title="Hoje" icon={Clock} count={bidSections.hoje.length} color="bg-emerald-500 text-white" />
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-10">
-                {/* Fix: Using render function instead of JSX component to properly handle 'key' */}
                 {bidSections.hoje.map(bid => renderBidCard(bid))}
               </div>
             </section>
           )}
 
-          {/* SEÇÃO PRÓXIMAS */}
           {bidSections.proximas.length > 0 && (
             <section>
               <SectionHeader title="Próximas" icon={CalendarDays} count={bidSections.proximas.length} color="bg-blue-600 text-white" />
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-10">
-                {/* Fix: Using render function instead of JSX component to properly handle 'key' */}
                 {bidSections.proximas.map(bid => renderBidCard(bid))}
               </div>
             </section>
           )}
 
-          {/* SEÇÃO PASSADAS */}
           {bidSections.passadas.length > 0 && (
             <section>
               <SectionHeader title="Passadas" icon={History} count={bidSections.passadas.length} color="bg-slate-400 text-white" />
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-10">
-                {/* Fix: Using render function instead of JSX component to properly handle 'key' */}
                 {bidSections.passadas.map(bid => renderBidCard(bid))}
               </div>
             </section>

@@ -14,7 +14,6 @@ const KEYS = {
 
 const BUCKET_NAME = 'backup-files';
 
-let syncTimeout: any = null;
 let isSyncing = false;
 
 export const DataService = {
@@ -37,7 +36,6 @@ export const DataService = {
 
   mergeCollections: (local: any[] = [], cloud: any[] = []) => {
     const map = new Map();
-    // Prioridade para o que tiver o timestamp/updated_at mais recente
     [...cloud, ...local].forEach(item => {
       const existing = map.get(item.id);
       const itemDate = new Date(item.updated_at || item.timestamp || 0).getTime();
@@ -48,7 +46,6 @@ export const DataService = {
       }
     });
 
-    // Retorna ordenado por data (mais novo primeiro)
     return Array.from(map.values()).sort((a, b) => {
       const dateA = new Date(a.updated_at || a.timestamp || 0).getTime();
       const dateB = new Date(b.updated_at || b.timestamp || 0).getTime();
@@ -56,55 +53,60 @@ export const DataService = {
     });
   },
 
-  syncToCloud: async (payload: any) => {
-    if (syncTimeout) clearTimeout(syncTimeout);
+  syncToCloud: async (payload: any, clientLastUpdate: string | null) => {
+    if (isSyncing) return { success: false, error: 'Ocupado' };
 
-    return new Promise((resolve) => {
-      syncTimeout = setTimeout(async () => {
-        if (isSyncing) {
-           resolve({ success: false, error: 'Sincronização em curso' });
-           return;
+    try {
+      isSyncing = true;
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('Deslogado');
+
+      const userId = session.user.id;
+      const statePath = `${userId}/oraculo_state.json`;
+
+      // --- OPTIMISTIC LOCKING ---
+      const { data: remoteInfo } = await supabase
+        .from('kits_vital_backup')
+        .select('updated_at')
+        .eq('user_id', userId)
+        .maybeSingle();
+
+      if (remoteInfo && clientLastUpdate) {
+        const serverDate = new Date(remoteInfo.updated_at).getTime();
+        const clientDate = new Date(clientLastUpdate).getTime();
+        
+        // Se a nuvem está mais de 2 segundos à frente do que eu tenho (margem de segurança)
+        if (serverDate > clientDate + 2000) {
+          return { success: false, conflict: true };
         }
+      }
 
-        try {
-          isSyncing = true;
-          const { data: { session } } = await supabase.auth.getSession();
-          if (!session) throw new Error('Sem sessão');
+      const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+      const file = new File([blob], 'oraculo_state.json', { type: 'application/json' });
 
-          const userId = session.user.id;
-          const statePath = `${userId}/oraculo_state.json`;
+      const { error: storageError } = await supabase.storage
+        .from(BUCKET_NAME)
+        .upload(statePath, file, { upsert: true });
 
-          // Na sincronização de "Save", enviamos o payload local como verdade absoluta
-          // para permitir exclusões. O Merge só acontece no Load inicial ou Refresh manual.
-          const finalPayload = payload;
+      if (storageError) throw storageError;
 
-          const blob = new Blob([JSON.stringify(finalPayload)], { type: 'application/json' });
-          const file = new File([blob], 'oraculo_state.json', { type: 'application/json' });
+      const newTimestamp = new Date().toISOString();
+      await supabase
+        .from('kits_vital_backup')
+        .upsert({ 
+          user_id: userId, 
+          file_url: statePath,
+          payload: {}, 
+          updated_at: newTimestamp 
+        }, { onConflict: 'user_id' });
 
-          const { error: storageError } = await supabase.storage
-            .from(BUCKET_NAME)
-            .upload(statePath, file, { upsert: true });
-
-          if (storageError) throw storageError;
-
-          await supabase
-            .from('kits_vital_backup')
-            .upsert({ 
-              user_id: userId, 
-              file_url: statePath,
-              payload: {}, 
-              updated_at: new Date().toISOString() 
-            }, { onConflict: 'user_id' });
-
-          resolve({ success: true, data: finalPayload });
-        } catch (e: any) {
-          console.error("[Oráculo] Erro na sincronia:", e.message);
-          resolve({ success: false, error: e.message });
-        } finally {
-          isSyncing = false;
-        }
-      }, 1500); 
-    });
+      return { success: true, timestamp: newTimestamp };
+    } catch (e: any) {
+      console.error("[Sync Fail]", e.message);
+      return { success: false, error: e.message };
+    } finally {
+      isSyncing = false;
+    }
   },
 
   loadFromCloud: async () => {
@@ -114,7 +116,7 @@ export const DataService = {
 
       const { data: dbData } = await supabase
         .from('kits_vital_backup')
-        .select('file_url')
+        .select('file_url, updated_at')
         .eq('user_id', session.user.id)
         .maybeSingle();
 
@@ -126,7 +128,10 @@ export const DataService = {
 
       if (!fileError && fileData) {
         const text = await fileData.text();
-        return JSON.parse(text);
+        return { 
+          data: JSON.parse(text), 
+          updatedAt: dbData.updated_at 
+        };
       }
       return null;
     } catch (e) { return null; }
